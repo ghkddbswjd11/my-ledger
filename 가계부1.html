@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>심플 스마트 가계부 - Simple Household Ledger</title>
+    
+    <!-- PWA / Mobile Setup -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="심플가계부">
+    <meta name="theme-color" content="#ffffff">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/2953/2953361.png">
+
+    <!-- External CDNs -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase Realtime Database SDK for Real-time PC ↔ Mobile Sync -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+
+    <script>
+        if (window.tailwind) {
+            tailwind.config = {
+                theme: {
+                    extend: {
+                        colors: {
+                            brand: {
+                                50: '#f0f9ff',
+                                100: '#e0f2fe',
+                                500: '#0284c7',
+                                600: '#0369a1',
+                                700: '#075985',
+                            },
+                            expense: '#f43f5e',
+                            income: '#10b981'
+                        },
+                        fontFamily: {
+                            sans: ['Noto Sans KR', 'sans-serif'],
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #f8fafc;
+            -webkit-tap-highlight-color: transparent;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col justify-between">
+
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-500 text-white flex items-center justify-center font-bold text-lg shadow-sm flex-shrink-0">
+                    <i class="fa-solid fa-wallet"></i>
+                </div>
+                <div class="min-w-0">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <h1 class="text-base sm:text-lg font-bold text-slate-800 leading-tight">심플 스마트 가계부</h1>
+                        <!-- Live Sync Indicator Button -->
+                        <button type="button" onclick="openCloudSyncModal()" id="syncStatusBadge" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200 transition">
+                            <i class="fa-solid fa-hard-drive text-slate-400" id="syncStatusIcon"></i>
+                            <span id="syncStatusText">로컬 저장</span>
+                        </button>
+                    </div>
+                    <p class="text-[11px] text-slate-400 hidden sm:block">AI 영수증 분석 & PC-모바일 실시간 연동</p>
+                </div>
+            </div>
+
+            <!-- Month / All-time Navigator -->
+            <div class="flex items-center bg-slate-100 rounded-xl p-1 shadow-inner flex-shrink-0">
+                <button id="prevMonthBtn" type="button" aria-label="이전달" class="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white text-slate-600 transition active:scale-95">
+                    <i class="fa-solid fa-chevron-left text-xs"></i>
+                </button>
+                <button id="periodToggleBtn" type="button" onclick="togglePeriodMode()" class="px-2 font-bold text-xs text-slate-700 hover:text-sky-600 min-w-[85px] sm:min-w-[95px] text-center transition" title="클릭하여 전체 기간/월별 전환">
+                    <span id="currentMonthDisplay">----년 --월</span>
+                </button>
+                <button id="nextMonthBtn" type="button" aria-label="다음달" class="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white text-slate-600 transition active:scale-95">
+                    <i class="fa-solid fa-chevron-right text-xs"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-3xl mx-auto px-4 py-5 w-full flex-grow space-y-4">
+
+        <!-- Cloud Sync Notification Banner (If enabled) -->
+        <div id="cloudSyncBanner" class="hidden bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-800 flex items-center justify-between shadow-sm">
+            <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
+                    <i class="fa-solid fa-cloud"></i>
+                </div>
+                <div>
+                    <span class="font-bold">실시간 클라우드 자동 동기화 활성화됨</span>
+                    <p class="text-[11px] text-emerald-600">동기화 코드: <strong id="activeSyncCodeText" class="underline"></strong> (PC와 모바일 양쪽에서 실시간 반영중)</p>
+                </div>
+            </div>
+            <button onclick="openCloudSyncModal()" class="px-2.5 py-1 bg-white border border-emerald-300 text-emerald-700 font-bold rounded-lg text-[11px] hover:bg-emerald-100 transition">설정</button>
+        </div>
+
+        <!-- Mode Indicator Banner -->
+        <div id="viewModeBanner" class="hidden bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2 text-xs text-indigo-700 flex items-center justify-between">
+            <span class="flex items-center gap-1.5 font-medium">
+                <i class="fa-solid fa-infinity"></i> 현재 <strong>전체 기간 누적 내역</strong>을 조회하고 있습니다.
+            </span>
+            <button onclick="togglePeriodMode('monthly')" class="text-[11px] font-bold text-indigo-600 hover:underline">월별 보기로 전환</button>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2.5 sm:gap-4">
+            <!-- Total Income -->
+            <div class="bg-white rounded-2xl p-3.5 border border-slate-100 shadow-sm flex flex-col justify-center">
+                <p class="text-[11px] font-medium text-slate-400 mb-1 flex items-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> 수입
+                </p>
+                <h3 class="text-base sm:text-lg font-bold text-emerald-600 truncate" id="totalIncomeText">0원</h3>
+            </div>
+
+            <!-- Total Expense -->
+            <div class="bg-white rounded-2xl p-3.5 border border-slate-100 shadow-sm flex flex-col justify-center">
+                <p class="text-[11px] font-medium text-slate-400 mb-1 flex items-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-rose-500"></span> 지출
+                </p>
+                <h3 class="text-base sm:text-lg font-bold text-rose-500 truncate" id="totalExpenseText">0원</h3>
+            </div>
+
+            <!-- Net Balance -->
+            <div class="bg-white rounded-2xl p-3.5 border border-slate-100 shadow-sm flex flex-col justify-center">
+                <p class="text-[11px] font-medium text-slate-400 mb-1 flex items-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-sky-500"></span> 순수지
+                </p>
+                <h3 class="text-base sm:text-lg font-bold text-slate-800 truncate" id="netBalanceText">0원</h3>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-2xl p-3.5 border border-slate-100 shadow-sm space-y-2">
+            <div class="flex justify-between items-center text-xs">
+                <span class="font-bold text-slate-700 flex items-center gap-1.5">
+                    <i class="fa-solid fa-bullseye text-sky-500"></i> 이 달의 지출 목표 (예산)
+                </span>
+                <button type="button" onclick="promptSetBudget()" class="text-[11px] text-sky-600 font-medium hover:underline">
+                    목표 수정
+                </button>
+            </div>
+            <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden flex">
+                <div id="budgetProgressBar" class="bg-sky-500 h-full transition-all duration-500 rounded-full" style="width: 0%"></div>
+            </div>
+            <div class="flex justify-between items-center text-[11px] text-slate-400">
+                <span id="budgetUsageText">사용액: 0원</span>
+                <span id="budgetGoalText">목표 예산: 1,500,000원</span>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+            <!-- 1. AI Receipt Scan -->
+            <button type="button" onclick="openReceiptModal()" class="py-3 px-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-[0.98] text-white font-semibold rounded-2xl text-xs sm:text-sm flex flex-col sm:flex-row items-center justify-center gap-1.5 transition shadow-md shadow-emerald-500/20">
+                <i class="fa-solid fa-receipt text-base"></i>
+                <span>영수증 AI 스캔</span>
+            </button>
+
+            <!-- 2. Text Parser -->
+            <button type="button" onclick="openSmartParseModal()" class="py-3 px-2 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 text-indigo-700 font-semibold rounded-2xl text-xs sm:text-sm flex flex-col sm:flex-row items-center justify-center gap-1.5 transition shadow-sm border border-indigo-100">
+                <i class="fa-solid fa-wand-magic-sparkles text-base"></i>
+                <span>문자 자동입력</span>
+            </button>
+
+            <!-- 3. Manual Add -->
+            <button type="button" onclick="openAddModal()" class="py-3 px-2 bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white font-semibold rounded-2xl text-xs sm:text-sm flex flex-col sm:flex-row items-center justify-center gap-1.5 transition shadow-md shadow-sky-500/20">
+                <i class="fa-solid fa-plus text-base"></i>
+                <span>내역 직접추가</span>
+            </button>
+        </div>
+
+        <div class="flex border-b border-slate-200">
+            <button id="tabListBtn" onclick="switchViewTab('list')" class="py-2 px-4 text-xs font-bold text-sky-600 border-b-2 border-sky-600 transition flex items-center gap-1.5">
+                <i class="fa-solid fa-list-ul"></i> 상세 내역
+            </button>
+            <button id="tabAnalyticsBtn" onclick="switchViewTab('analytics')" class="py-2 px-4 text-xs font-medium text-slate-400 hover:text-slate-600 border-b-2 border-transparent transition flex items-center gap-1.5">
+                <i class="fa-solid fa-chart-pie"></i> 카테고리 통계
+            </button>
+        </div>
+
+        <div id="viewContainerList" class="space-y-3">
+            <!-- Filter & Search Bar -->
+            <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+                <div class="flex items-center gap-2">
+                    <select id="filterType" onchange="renderTransactionsList()" class="px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-sky-500">
+                        <option value="all">전체 (수입+지출)</option>
+                        <option value="expense">지출만</option>
+                        <option value="income">수입만</option>
+                    </select>
+
+                    <select id="filterCategory" onchange="renderTransactionsList()" class="px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-sky-500">
+                        <option value="all">전체 카테고리</option>
+                    </select>
+
+                    <div class="relative flex-1">
+                        <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                        <input type="text" id="filterKeyword" oninput="renderTransactionsList()" placeholder="사용처/메모/결제수단..." class="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    </div>
+                </div>
+
+                <div class="flex justify-between items-center px-1 text-[11px] text-slate-400">
+                    <span>조회된 내역 <strong id="listCountText" class="text-slate-700">0</strong>건 (총 저장: <strong id="totalSavedCountText" class="text-indigo-600">0</strong>건)</span>
+                    <div class="flex items-center gap-3">
+                        <button type="button" onclick="openCloudSyncModal()" class="hover:text-emerald-600 flex items-center gap-1 font-semibold text-emerald-700">
+                            <i class="fa-solid fa-cloud-arrow-up"></i> 실시간 연동 설정
+                        </button>
+                        <button type="button" onclick="toggleBackupModal()" class="hover:text-sky-600 flex items-center gap-1 underline">
+                            <i class="fa-solid fa-gear"></i> 백업 & 관리
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transactions Feed -->
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden min-h-[180px]">
+                <div id="fullTransactionsList" class="divide-y divide-slate-100">
+                    <!-- Dynamic rendering -->
+                </div>
+            </div>
+        </div>
+
+        <div id="viewContainerAnalytics" class="hidden space-y-3">
+            <div class="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
+                <h4 class="text-xs font-bold text-slate-700 flex items-center justify-between">
+                    <span>카테고리별 지출 비율</span>
+                    <span id="analyticsTotalExpense" class="text-rose-500 font-bold">0원</span>
+                </h4>
+
+                <!-- Category Breakdown Progress Bars -->
+                <div id="categoryBreakdownList" class="space-y-3">
+                    <!-- Dynamic rendering -->
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-slate-100 py-3 text-center text-[11px] text-slate-400">
+        © Simple Smart Household Ledger. Data auto-synced locally & in cloud.
+    </footer>
+
+    <div id="addModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-4" onclick="handleBackdropClick(event, 'addModal')">
+        <div class="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl transition-all" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-base font-bold text-slate-800" id="modalTitle">내역 추가</h3>
+                <button type="button" onclick="closeAddModal()" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <form id="transactionForm" onsubmit="saveTransaction(event)" class="space-y-3.5">
+                <input type="hidden" id="editId" value="">
+
+                <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
+                    <button type="button" id="typeBtnExpense" onclick="setTransactionType('expense')" class="py-2 rounded-lg text-xs font-semibold transition bg-white text-rose-600 shadow-sm">
+                        지출 <i class="fa-solid fa-arrow-up-right ml-1"></i>
+                    </button>
+                    <button type="button" id="typeBtnIncome" onclick="setTransactionType('income')" class="py-2 rounded-lg text-xs font-semibold transition text-slate-500">
+                        수입 <i class="fa-solid fa-arrow-down-left ml-1"></i>
+                    </button>
+                </div>
+                <input type="hidden" id="txType" value="expense">
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 mb-1" for="txDate">날짜</label>
+                    <input type="date" id="txDate" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-sky-500">
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 mb-1" for="txAmount">금액 (원)</label>
+                    <input type="text" id="txAmount" inputmode="numeric" placeholder="0" oninput="formatAmountInput(this)" required class="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-lg focus:outline-none focus:ring-2 focus:ring-sky-500">
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 mb-1" for="txCategory">카테고리</label>
+                    <select id="txCategory" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 mb-1" for="txPaymentMethod">결제 수단</label>
+                    <select id="txPaymentMethod" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-sky-500">
+                        <option value="신용/체크카드">신용/체크카드</option>
+                        <option value="계좌이체">계좌이체/현금</option>
+                        <option value="네이버 페이">네이버 페이</option>
+                        <option value="기타">기타</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 mb-1" for="txNote">사용처 및 메모</label>
+                    <input type="text" id="txNote" placeholder="예: 식당, 마트 등" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-sky-500">
+                </div>
+
+                <div class="pt-2">
+                    <button type="submit" class="w-full py-3 bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md shadow-sky-500/20 transition flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-floppy-disk"></i>
+                        <span>내역 저장하기</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="cloudSyncModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-4" onclick="handleBackdropClick(event, 'cloudSyncModal')">
+        <div class="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center">
+                <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fa-solid fa-cloud text-sky-500"></i>
+                    PC ↔ 모바일 실시간 자동 연동
+                </h3>
+                <button type="button" onclick="closeCloudSyncModal()" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="bg-slate-50 rounded-2xl p-3 border border-slate-200 space-y-2 text-xs text-slate-600">
+                <p class="font-bold text-slate-800 flex items-center gap-1">
+                    <i class="fa-solid fa-lightbulb text-amber-500"></i> 사용 가이드:
+                </p>
+                <ol class="list-decimal list-inside space-y-1 text-[11px] leading-relaxed">
+                    <li>나만의 **[동기화 코드]**(예: <code class="bg-amber-100 text-amber-800 px-1 rounded">ourfamily1234</code>)를 정합니다.</li>
+                    <li>PC와 모바일 가계부 양쪽에 **동일한 코드**를 입력하고 [연동하기]를 누릅니다.</li>
+                    <li>한쪽에서 저장하면 다른쪽 기기에도 즉시 실시간 반영됩니다!</li>
+                </ol>
+            </div>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-[11px] font-semibold text-slate-600 mb-1" for="syncCodeInput">
+                        동기화 코드 (고유 비밀번호)
+                    </label>
+                    <div class="flex gap-2">
+                        <input type="text" id="syncCodeInput" placeholder="예: my-home-2026" class="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold font-mono focus:outline-none focus:ring-2 focus:ring-sky-500">
+                        <button type="button" onclick="generateRandomSyncCode()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition whitespace-nowrap">
+                            랜덤 생성
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button type="button" onclick="connectCloudSync()" class="py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-link"></i>
+                        <span>실시간 연동 시작</span>
+                    </button>
+                    <button type="button" onclick="disconnectCloudSync()" class="py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-plug-circle-xmark"></i>
+                        <span>연동 해제</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="syncStatusBox" class="text-center p-2.5 rounded-xl text-xs font-medium bg-slate-100 text-slate-500">
+                현재 상태: 연동되어 있지 않음 (단독 로컬 저장 모드)
+            </div>
+        </div>
+    </div>
+
+    <div id="receiptModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-4" onclick="handleBackdropClick(event, 'receiptModal')">
+        <div class="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center">
+                <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fa-solid fa-receipt text-emerald-600"></i>
+                    영수증 AI 스캔
+                </h3>
+                <button type="button" onclick="closeReceiptModal()" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <p class="text-xs text-slate-500">
+                영수증 사진을 촬영하거나 이미지를 업로드하면 AI가 금액, 날짜, 사용처를 자동으로 추출합니다.
+            </p>
+
+            <div id="receiptDropZone" class="border-2 border-dashed border-emerald-200 hover:border-emerald-400 bg-emerald-50/50 rounded-2xl p-6 text-center cursor-pointer transition relative">
+                <input type="file" id="receiptFileInput" accept="image/*" capture="environment" onchange="handleReceiptFileSelect(event)" class="absolute inset-0 opacity-0 cursor-pointer">
+                
+                <div id="receiptUploadPlaceholder" class="space-y-2">
+                    <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto text-xl">
+                        <i class="fa-solid fa-camera"></i>
+                    </div>
+                    <p class="text-xs font-bold text-slate-700">영수증 촬영 또는 이미지 선택</p>
+                    <p class="text-[11px] text-slate-400">터치하여 카메라를 열거나 갤러리에서 선택하세요</p>
+                </div>
+
+                <div id="receiptPreviewContainer" class="hidden relative">
+                    <img id="receiptImagePreview" src="" alt="영수증 미리보기" class="max-h-48 mx-auto rounded-xl shadow-md border border-slate-200 object-contain">
+                    <button type="button" onclick="resetReceiptImage(event)" class="absolute top-1 right-1 bg-slate-900/70 text-white w-7 h-7 rounded-full text-xs flex items-center justify-center hover:bg-slate-900">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div id="receiptScanLoading" class="hidden text-center py-3 space-y-2">
+                <div class="inline-block animate-spin text-emerald-600 text-2xl">
+                    <i class="fa-solid fa-circle-notch"></i>
+                </div>
+                <p class="text-xs text-slate-600 font-medium">Gemini AI가 영수증 정보를 분석하고 있습니다...</p>
+            </div>
+
+            <button type="button" id="startScanBtn" onclick="processReceiptScan()" disabled class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-2">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> AI로 영수증 분석하기
+            </button>
+        </div>
+    </div>
+
+    <div id="smartParseModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-4" onclick="handleBackdropClick(event, 'smartParseModal')">
+        <div class="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fa-solid fa-wand-magic-sparkles text-indigo-500"></i>
+                    문자 / 카톡 자동입력
+                </h3>
+                <button type="button" onclick="closeSmartParseModal()" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <p class="text-xs text-slate-500 mb-3">
+                복사한 결제 알림 문자나 카카오톡 메시지를 붙여넣으세요.
+            </p>
+
+            <textarea id="smartTextInput" rows="4" placeholder="예시:&#10;[KB국민카드] 09/02 12:30 4,200원 얌샘김밥 이매점 승인" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"></textarea>
+
+            <div class="flex gap-2 mt-3">
+                <button type="button" onclick="processSmartParse()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md transition">
+                    분석 및 입력창 채우기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="backupModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center hidden p-0 sm:p-4" onclick="handleBackdropClick(event, 'backupModal')">
+        <div class="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-3" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-1">
+                <h3 class="text-base font-bold text-slate-800">데이터 백업 및 관리</h3>
+                <button type="button" onclick="toggleBackupModal()" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <p class="text-xs text-slate-500">모든 가계부 내역은 브라우저에 누적 저장되며, 파일로 백업 및 복원할 수 있습니다.</p>
+            
+            <div class="flex flex-col gap-2 pt-2">
+                <button type="button" onclick="scanAndRecoverLostData()" class="w-full py-2.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition border border-amber-200">
+                    <i class="fa-solid fa-life-ring text-amber-600"></i> 잃어버린 데이터 자동 스캔 & 복구
+                </button>
+                <button type="button" onclick="exportDataCSV()" class="w-full py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-medium rounded-xl text-xs flex items-center justify-center gap-2 transition">
+                    <i class="fa-solid fa-file-csv"></i> 엑셀용 백업 내역 다운로드 (.csv)
+                </button>
+                <button type="button" onclick="exportDataJSON()" class="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-xl text-xs flex items-center justify-center gap-2 transition">
+                    <i class="fa-solid fa-download"></i> JSON 백업 파일 다운로드 (.json)
+                </button>
+                <label class="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer">
+                    <i class="fa-solid fa-upload"></i> 백업 파일 복원하기 (.json)
+                    <input type="file" id="importFileInput" onchange="importDataJSON(event)" accept=".json" class="hidden">
+                </label>
+                <button type="button" onclick="requestClearAllData()" class="w-full py-2.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-600 font-medium rounded-xl text-xs flex items-center justify-center gap-2 transition">
+                    <i class="fa-solid fa-trash-can"></i> 전체 데이터 초기화
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirmModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4" onclick="handleBackdropClick(event, 'confirmModal')">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4" onclick="event.stopPropagation()">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-lg flex-shrink-0">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <div>
+                    <h4 id="confirmTitle" class="text-sm font-bold text-slate-800">확인</h4>
+                    <p id="confirmMessage" class="text-xs text-slate-500 mt-0.5">정말 진행하시겠습니까?</p>
+                </div>
+            </div>
+            <div class="flex gap-2 justify-end pt-2">
+                <button type="button" onclick="closeConfirmModal(false)" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition">
+                    취소
+                </button>
+                <button type="button" id="confirmActionBtn" onclick="closeConfirmModal(true)" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl text-xs transition shadow-sm">
+                    확인
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="fixed bottom-5 right-5 left-5 sm:left-auto sm:max-w-xs bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 transition-all transform translate-y-20 opacity-0 z-50 pointer-events-none">
+        <i id="toastIcon" class="fa-solid fa-circle-check text-emerald-400"></i>
+        <span id="toastMessage" class="text-xs font-medium">처리되었습니다.</span>
+    </div>
+
+    <script>
+        const CATEGORIES = {
+            expense: [
+                { name: '식비/카페', icon: 'fa-utensils', color: '#f43f5e' },
+                { name: '교통/차량', icon: 'fa-bus', color: '#3b82f6' },
+                { name: '쇼핑/의류', icon: 'fa-bag-shopping', color: '#ec4899' },
+                { name: '주거/통신', icon: 'fa-house', color: '#8b5cf6' },
+                { name: '문화/취미', icon: 'fa-gamepad', color: '#06b6d4' },
+                { name: '의료/건강', icon: 'fa-notes-medical', color: '#10b981' },
+                { name: '기타지출', icon: 'fa-ellipsis', color: '#64748b' }
+            ],
+            income: [
+                { name: '월급/급여', icon: 'fa-money-bill-wave', color: '#10b981' },
+                { name: '부수입/상여', icon: 'fa-gift', color: '#0284c7' },
+                { name: '금융/이자', icon: 'fa-chart-line', color: '#f59e0b' },
+                { name: '기타수입', icon: 'fa-wallet', color: '#64748b' }
+            ]
+        };
+
+        const STORAGE_KEY = 'simple_smart_ledger_txs_v5';
+        const SYNC_CODE_KEY = 'simple_smart_ledger_sync_code';
+        const LEGACY_KEYS = [
+            'simple_smart_ledger_txs_v1',
+            'simple_smart_ledger_txs_v2',
+            'simple_smart_ledger_txs_v3',
+            'simple_smart_ledger_txs_v4',
+            'simple_smart_ledger_txs_v5',
+            'household_ledger_items',
+            'ledger_transactions'
+        ];
+        const BUDGET_KEY = 'simple_smart_ledger_budget_v1';
+        
+        let transactions = [];
+        let monthlyBudget = 1500000;
+        let currentYear = new Date().getFullYear();
+        let currentMonth = new Date().getMonth() + 1;
+        let periodMode = 'all'; // Default to 'all' so entries are always visible
+        let pendingConfirmCallback = null;
+
+        // Firebase Cloud Sync Global Variables
+        let firebaseDb = null;
+        let currentSyncCode = null;
+        let dbRefListener = null;
+
+        // Public standard Firebase Database Config for sync
+        const DEFAULT_FIREBASE_CONFIG = {
+            databaseURL: "https://simple-ledger-sync-default-rtdb.asia-southeast1.firebasedatabase.app"
+        };
+
+        function initFirebaseSync() {
+            try {
+                if (!firebase.apps.length) {
+                    firebase.initializeApp(DEFAULT_FIREBASE_CONFIG);
+                }
+                firebaseDb = firebase.database();
+            } catch (e) {
+                console.warn("Firebase Init Notice:", e);
+            }
+        }
+
+        function loadDataFromStorage() {
+            try {
+                const savedBudget = localStorage.getItem(BUDGET_KEY);
+                if (savedBudget) {
+                    monthlyBudget = Number(savedBudget) || 1500000;
+                }
+
+                let merged = [];
+                // Multi-key Legacy Search
+                LEGACY_KEYS.forEach(key => {
+                    const localData = localStorage.getItem(key);
+                    const sessionData = sessionStorage.getItem(key);
+                    [localData, sessionData].forEach(d => {
+                        if (d) {
+                            try {
+                                const parsed = JSON.parse(d);
+                                if (Array.isArray(parsed)) {
+                                    merged = merged.concat(parsed);
+                                }
+                            } catch(e) {}
+                        }
+                    });
+                });
+
+                // Deduplicate items by ID or unique combo
+                const uniqueMap = new Map();
+                merged.forEach(item => {
+                    if (item && item.id) {
+                        uniqueMap.set(item.id, item);
+                    } else if (item && item.date && item.amount) {
+                        const altKey = `${item.date}_${item.amount}_${item.note || ''}`;
+                        uniqueMap.set(altKey, { ...item, id: item.id || Date.now().toString() + Math.random() });
+                    }
+                });
+
+                if (uniqueMap.size > 0) {
+                    transactions = Array.from(uniqueMap.values());
+                } else {
+                    // Restored default sample data
+                    transactions = [
+                        { id: 'tx_sep16_1', type: 'expense', date: '2026-09-16', amount: 15000, category: '식비/카페', paymentMethod: '네이버 페이', note: '식비 (9/16)' },
+                        { id: 'tx_sep17_1', type: 'expense', date: '2026-09-17', amount: 29100, category: '식비/카페', paymentMethod: '신용/체크카드', note: '식비 (9/17)' },
+                        { id: 'tx_sep18_1', type: 'expense', date: '2026-09-18', amount: 37300, category: '식비/카페', paymentMethod: '신용/체크카드', note: '식비 (9/18)' }
+                    ];
+                }
+                saveDataToStorage();
+            } catch (e) {
+                console.warn("Storage access notice engaged.", e);
+            }
+        }
+
+        function scanAndRecoverLostData() {
+            let recoveredCount = 0;
+            const uniqueMap = new Map();
+            
+            // Re-populate with current transactions
+            transactions.forEach(t => uniqueMap.set(t.id, t));
+
+            // Scan all keys in localStorage
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                try {
+                    const val = localStorage.getItem(key);
+                    if (val && val.startsWith('[')) {
+                        const parsed = JSON.parse(val);
+                        if (Array.isArray(parsed)) {
+                            parsed.forEach(item => {
+                                if (item && item.amount && item.date) {
+                                    const id = item.id || `${item.date}_${item.amount}_${item.note || ''}`;
+                                    if (!uniqueMap.has(id)) {
+                                        uniqueMap.set(id, { ...item, id });
+                                        recoveredCount++;
+                                    }
+                                }
+                            });
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            transactions = Array.from(uniqueMap.values());
+            saveDataToStorage();
+            periodMode = 'all';
+            updateMonthHeader();
+            renderAllViews();
+            
+            if (recoveredCount > 0) {
+                showToast(`${recoveredCount}건의 숨겨진 내역을 찾아서 복구했습니다!`);
+            } else {
+                showToast(`현재 저장소에 존재하는 모든 내역(${transactions.length}건)을 화면에 동기화했습니다.`);
+            }
+        }
+
+        function saveDataToStorage() {
+            try {
+                const data = JSON.stringify(transactions);
+                localStorage.setItem(STORAGE_KEY, data);
+                sessionStorage.setItem(STORAGE_KEY, data);
+                localStorage.setItem(BUDGET_KEY, monthlyBudget.toString());
+
+                // Auto push to Firebase if sync is active
+                pushToCloudSync();
+            } catch (e) {
+                console.warn("Could not write to localStorage.", e);
+            }
+        }
+
+        function sanitizeSyncCode(code) {
+            if (!code) return '';
+            return code.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        }
+
+        function openCloudSyncModal() {
+            const savedCode = localStorage.getItem(SYNC_CODE_KEY) || currentSyncCode || '';
+            document.getElementById('syncCodeInput').value = savedCode;
+            updateSyncStatusUI();
+            document.getElementById('cloudSyncModal').classList.remove('hidden');
+        }
+
+        function closeCloudSyncModal() {
+            document.getElementById('cloudSyncModal').classList.add('hidden');
+        }
+
+        function generateRandomSyncCode() {
+            const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+            let code = 'myhouse-';
+            for (let i = 0; i < 6; i++) {
+                code += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            document.getElementById('syncCodeInput').value = code;
+        }
+
+        function connectCloudSync() {
+            const rawCode = document.getElementById('syncCodeInput').value;
+            const code = sanitizeSyncCode(rawCode);
+
+            if (!code || code.length < 3) {
+                showToast('동기화 코드를 3글자 이상 입력해주세요.', 'error');
+                return;
+            }
+
+            currentSyncCode = code;
+            localStorage.setItem(SYNC_CODE_KEY, code);
+
+            initFirebaseSync();
+            startListeningToCloudSync(code);
+        }
+
+        function disconnectCloudSync() {
+            if (dbRefListener && currentSyncCode && firebaseDb) {
+                firebaseDb.ref('ledgers/' + currentSyncCode).off('value', dbRefListener);
+            }
+            currentSyncCode = null;
+            dbRefListener = null;
+            localStorage.removeItem(SYNC_CODE_KEY);
+
+            updateSyncStatusUI();
+            showToast('실시간 클라우드 연동이 해제되었습니다. (로컬 전용)');
+        }
+
+        function startListeningToCloudSync(code) {
+            if (!firebaseDb) initFirebaseSync();
+            if (!firebaseDb) {
+                showToast('클라우드 DB에 연결할 수 없습니다.', 'error');
+                return;
+            }
+
+            const ledgerRef = firebaseDb.ref('ledgers/' + code);
+
+            // Detach previous listener if any
+            if (dbRefListener) {
+                ledgerRef.off('value', dbRefListener);
+            }
+
+            // Show connecting toast
+            showToast(`☁️ [${code}] 코드 실시간 연동 중...`);
+
+            dbRefListener = ledgerRef.on('value', (snapshot) => {
+                const cloudData = snapshot.val();
+                if (cloudData && Array.isArray(cloudData.transactions)) {
+                    // Smart merge with local data to avoid overwriting newer entries
+                    mergeCloudTransactions(cloudData.transactions);
+                } else if (!cloudData && transactions.length > 0) {
+                    // First time code created! Push current local transactions to cloud
+                    ledgerRef.set({
+                        transactions: transactions,
+                        lastUpdated: new Date().toISOString()
+                    });
+                }
+                updateSyncStatusUI();
+            }, (error) => {
+                console.error("Cloud Sync Error:", error);
+                showToast('클라우드 동기화 연결 오류', 'error');
+            });
+        }
+
+        function mergeCloudTransactions(cloudTxs) {
+            const map = new Map();
+            // Local items first
+            transactions.forEach(t => map.set(t.id, t));
+
+            // Cloud items
+            let newItemsAdded = 0;
+            cloudTxs.forEach(cloudItem => {
+                if (cloudItem && cloudItem.id) {
+                    if (!map.has(cloudItem.id)) {
+                        newItemsAdded++;
+                    }
+                    map.set(cloudItem.id, cloudItem);
+                }
+            });
+
+            transactions = Array.from(map.values());
+            
+            // Save locally without triggering loop
+            try {
+                const data = JSON.stringify(transactions);
+                localStorage.setItem(STORAGE_KEY, data);
+                sessionStorage.setItem(STORAGE_KEY, data);
+            } catch(e) {}
+
+            renderAllViews();
+
+            if (newItemsAdded > 0) {
+                showToast(`☁️ 클라우드에서 새 내역 ${newItemsAdded}건을 동기화했습니다!`);
+            }
+        }
+
+        function pushToCloudSync() {
+            if (!currentSyncCode || !firebaseDb) return;
+            try {
+                firebaseDb.ref('ledgers/' + currentSyncCode).set({
+                    transactions: transactions,
+                    lastUpdated: new Date().toISOString()
+                });
+            } catch(e) {
+                console.warn("Push cloud notice:", e);
+            }
+        }
+
+        function updateSyncStatusUI() {
+            const badge = document.getElementById('syncStatusBadge');
+            const icon = document.getElementById('syncStatusIcon');
+            const text = document.getElementById('syncStatusText');
+            const banner = document.getElementById('cloudSyncBanner');
+            const statusBox = document.getElementById('syncStatusBox');
+            const activeCodeText = document.getElementById('activeSyncCodeText');
+
+            if (currentSyncCode) {
+                badge.className = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200 transition cursor-pointer";
+                icon.className = "fa-solid fa-cloud text-emerald-600";
+                text.innerText = `☁️ 연동됨 (${currentSyncCode})`;
+
+                banner.classList.remove('hidden');
+                if (activeCodeText) activeCodeText.innerText = currentSyncCode;
+
+                if (statusBox) {
+                    statusBox.className = "text-center p-2.5 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200";
+                    statusBox.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-500 mr-1"></i> 현재 <strong>[${currentSyncCode}]</strong> 코드로 실시간 연동중입니다.`;
+                }
+            } else {
+                badge.className = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200 transition cursor-pointer";
+                icon.className = "fa-solid fa-hard-drive text-slate-400";
+                text.innerText = "로컬 저장";
+
+                banner.classList.add('hidden');
+
+                if (statusBox) {
+                    statusBox.className = "text-center p-2.5 rounded-xl text-xs font-medium bg-slate-100 text-slate-500";
+                    statusBox.innerText = "현재 상태: 연동되어 있지 않음 (단독 로컬 저장 모드)";
+                }
+            }
+        }
+
+        function getTodayFormatted() {
+            const now = new Date();
+            const y = now.getFullYear();
+            const m = String(now.getMonth() + 1).padStart(2, '0');
+            const d = String(now.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const now = new Date();
+            currentYear = now.getFullYear();
+            currentMonth = now.getMonth() + 1;
+
+            loadDataFromStorage();
+            updateMonthHeader();
+            updateCategoryDropdownOptions();
+            renderAllViews();
+
+            // Auto connect if sync code was previously saved
+            const savedSyncCode = localStorage.getItem(SYNC_CODE_KEY);
+            if (savedSyncCode) {
+                currentSyncCode = savedSyncCode;
+                initFirebaseSync();
+                startListeningToCloudSync(savedSyncCode);
+            }
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closeAddModal();
+                    closeSmartParseModal();
+                    closeReceiptModal();
+                    closeCloudSyncModal();
+                    document.getElementById('backupModal').classList.add('hidden');
+                    closeConfirmModal(false);
+                }
+            });
+        });
+
+        document.getElementById('prevMonthBtn').addEventListener('click', () => {
+            periodMode = 'monthly';
+            currentMonth--;
+            if (currentMonth < 1) { currentMonth = 12; currentYear--; }
+            updateMonthHeader();
+            renderAllViews();
+        });
+
+        document.getElementById('nextMonthBtn').addEventListener('click', () => {
+            periodMode = 'monthly';
+            currentMonth++;
+            if (currentMonth > 12) { currentMonth = 1; currentYear++; }
+            updateMonthHeader();
+            renderAllViews();
+        });
+
+        function togglePeriodMode(forceMode) {
+            if (forceMode) {
+                periodMode = forceMode;
+            } else {
+                periodMode = (periodMode === 'monthly') ? 'all' : 'monthly';
+            }
+            updateMonthHeader();
+            renderAllViews();
+        }
+
+        function updateMonthHeader() {
+            const monthStr = String(currentMonth).padStart(2, '0');
+            const displayBtn = document.getElementById('currentMonthDisplay');
+            const banner = document.getElementById('viewModeBanner');
+
+            if (periodMode === 'all') {
+                displayBtn.innerText = '전체 기간';
+                banner.classList.remove('hidden');
+            } else {
+                displayBtn.innerText = `${currentYear}년 ${monthStr}월`;
+                banner.classList.add('hidden');
+            }
+        }
+
+        function getCurrentFilteredTxs() {
+            if (periodMode === 'all') {
+                return [...transactions];
+            }
+            const prefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+            return transactions.filter(t => t.date && t.date.startsWith(prefix));
+        }
+
+        function renderAllViews() {
+            renderSummaryCards();
+            renderBudgetProgress();
+            renderTransactionsList();
+            renderCategoryAnalytics();
+        }
+
+        function renderSummaryCards() {
+            const filtered = getCurrentFilteredTxs();
+            const totalIncome = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+            const totalExpense = filtered.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+            const netBalance = totalIncome - totalExpense;
+
+            document.getElementById('totalIncomeText').innerText = totalIncome.toLocaleString() + '원';
+            document.getElementById('totalExpenseText').innerText = totalExpense.toLocaleString() + '원';
+            document.getElementById('netBalanceText').innerText = (netBalance >= 0 ? '+' : '') + netBalance.toLocaleString() + '원';
+        }
+
+        function renderBudgetProgress() {
+            const filtered = getCurrentFilteredTxs();
+            const totalExpense = filtered.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+            const percent = Math.min(100, Math.round((totalExpense / (monthlyBudget || 1)) * 100));
+
+            const progressBar = document.getElementById('budgetProgressBar');
+            progressBar.style.width = `${percent}%`;
+
+            if (percent > 90) {
+                progressBar.className = 'bg-rose-500 h-full transition-all duration-500 rounded-full';
+            } else if (percent > 75) {
+                progressBar.className = 'bg-amber-500 h-full transition-all duration-500 rounded-full';
+            } else {
+                progressBar.className = 'bg-sky-500 h-full transition-all duration-500 rounded-full';
+            }
+
+            document.getElementById('budgetUsageText').innerText = `사용액: ${totalExpense.toLocaleString()}원 (${percent}%)`;
+            document.getElementById('budgetGoalText').innerText = `목표 예산: ${monthlyBudget.toLocaleString()}원`;
+        }
+
+        function promptSetBudget() {
+            const val = prompt('이 달의 목표 지출 예산을 입력해주세요 (원 단위):', monthlyBudget);
+            if (val !== null) {
+                const parsed = parseInt(val.replace(/[^\d]/g, ''), 10);
+                if (parsed && parsed > 0) {
+                    monthlyBudget = parsed;
+                    saveDataToStorage();
+                    renderBudgetProgress();
+                    showToast('목표 예산이 변경되었습니다.');
+                }
+            }
+        }
+
+        function switchViewTab(tab) {
+            const listBtn = document.getElementById('tabListBtn');
+            const analyticsBtn = document.getElementById('tabAnalyticsBtn');
+            const listContainer = document.getElementById('viewContainerList');
+            const analyticsContainer = document.getElementById('viewContainerAnalytics');
+
+            if (tab === 'list') {
+                listBtn.className = 'py-2 px-4 text-xs font-bold text-sky-600 border-b-2 border-sky-600 transition flex items-center gap-1.5';
+                analyticsBtn.className = 'py-2 px-4 text-xs font-medium text-slate-400 hover:text-slate-600 border-b-2 border-transparent transition flex items-center gap-1.5';
+                listContainer.classList.remove('hidden');
+                analyticsContainer.classList.add('hidden');
+            } else {
+                analyticsBtn.className = 'py-2 px-4 text-xs font-bold text-sky-600 border-b-2 border-sky-600 transition flex items-center gap-1.5';
+                listBtn.className = 'py-2 px-4 text-xs font-medium text-slate-400 hover:text-slate-600 border-b-2 border-transparent transition flex items-center gap-1.5';
+                analyticsContainer.classList.remove('hidden');
+                listContainer.classList.add('hidden');
+                renderCategoryAnalytics();
+            }
+        }
+
+        function renderCategoryAnalytics() {
+            const filtered = getCurrentFilteredTxs().filter(t => t.type === 'expense');
+            const totalExpense = filtered.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+            document.getElementById('analyticsTotalExpense').innerText = totalExpense.toLocaleString() + '원';
+
+            const catMap = {};
+            CATEGORIES.expense.forEach(c => { catMap[c.name] = { amount: 0, color: c.color, icon: c.icon }; });
+
+            filtered.forEach(t => {
+                if (!catMap[t.category]) {
+                    catMap[t.category] = { amount: 0, color: '#64748b', icon: 'fa-ellipsis' };
+                }
+                catMap[t.category].amount += Number(t.amount) || 0;
+            });
+
+            const sorted = Object.entries(catMap)
+                .map(([name, data]) => ({ name, ...data }))
+                .filter(c => c.amount > 0)
+                .sort((a, b) => b.amount - a.amount);
+
+            const container = document.getElementById('categoryBreakdownList');
+
+            if (sorted.length === 0) {
+                container.innerHTML = `
+                    <div class="py-6 text-center text-slate-400 text-xs">
+                        등록된 지출 내역이 없습니다.
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = sorted.map(c => {
+                const pct = totalExpense > 0 ? ((c.amount / totalExpense) * 100).toFixed(1) : 0;
+                return `
+                    <div class="space-y-1">
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="flex items-center gap-1.5 font-medium text-slate-700">
+                                <span class="w-6 h-6 rounded-lg flex items-center justify-center text-white text-[10px]" style="background-color: ${c.color}">
+                                    <i class="fa-solid ${c.icon}"></i>
+                                </span>
+                                ${c.name}
+                            </span>
+                            <span class="font-bold text-slate-800">${c.amount.toLocaleString()}원 (${pct}%)</span>
+                        </div>
+                        <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                            <div class="h-full rounded-full transition-all duration-500" style="width: ${pct}%; background-color: ${c.color}"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderTransactionsList() {
+            const typeFilter = document.getElementById('filterType').value;
+            const catFilter = document.getElementById('filterCategory').value;
+            const keyword = document.getElementById('filterKeyword').value.trim().toLowerCase();
+
+            let list = getCurrentFilteredTxs();
+
+            if (typeFilter !== 'all') {
+                list = list.filter(t => t.type === typeFilter);
+            }
+            if (catFilter !== 'all') {
+                list = list.filter(t => t.category === catFilter);
+            }
+            if (keyword) {
+                list = list.filter(t => 
+                    (t.note && t.note.toLowerCase().includes(keyword)) || 
+                    (t.paymentMethod && t.paymentMethod.toLowerCase().includes(keyword)) ||
+                    (t.category && t.category.toLowerCase().includes(keyword))
+                );
+            }
+
+            list.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            document.getElementById('listCountText').innerText = list.length;
+            document.getElementById('totalSavedCountText').innerText = transactions.length;
+
+            const container = document.getElementById('fullTransactionsList');
+
+            if (list.length === 0) {
+                container.innerHTML = `
+                    <div class="p-10 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
+                        <i class="fa-regular fa-folder-open text-2xl text-slate-300"></i>
+                        <span>${periodMode === 'all' ? '저장된 내역이 없습니다.' : '이 달에 등록된 내역이 없습니다.'}</span>
+                        <span class="text-[10px] text-slate-300">영수증 스캔 또는 + 버튼을 눌러 내역을 추가해보세요.</span>
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = list.map(t => createTransactionItemHTML(t)).join('');
+        }
+
+        function createTransactionItemHTML(t) {
+            const isExpense = t.type === 'expense';
+            const catObj = (isExpense ? CATEGORIES.expense : CATEGORIES.income).find(c => c.name === t.category) || { icon: 'fa-circle-dot', color: '#64748b' };
+            const amountVal = Number(t.amount) || 0;
+
+            return `
+                <div class="p-3.5 flex items-center justify-between hover:bg-slate-50 transition">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-xs shadow-sm flex-shrink-0" style="background-color: ${catObj.color}">
+                            <i class="fa-solid ${catObj.icon}"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="font-semibold text-xs sm:text-sm text-slate-800 truncate">${escapeHtml(t.note || '내역')}</div>
+                            <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                                <span>${t.date ? t.date : ''}</span>
+                                <span>•</span>
+                                <span>${escapeHtml(t.category || '')}</span>
+                                <span>•</span>
+                                <span class="hidden sm:inline">${escapeHtml(t.paymentMethod || '')}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 pl-2 flex-shrink-0">
+                        <span class="font-bold text-xs sm:text-sm ${isExpense ? 'text-rose-500' : 'text-emerald-600'} whitespace-nowrap">
+                            ${isExpense ? '-' : '+'}${amountVal.toLocaleString()}원
+                        </span>
+                        <div class="flex items-center">
+                            <button type="button" onclick="editTransaction('${t.id}')" aria-label="수정" class="w-7 h-7 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center text-xs transition">
+                                <i class="fa-solid fa-pen"></i>
+                            </button>
+                            <button type="button" onclick="requestDeleteTransaction('${t.id}')" aria-label="삭제" class="w-7 h-7 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center text-xs transition">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function updateCategoryDropdownOptions() {
+            const select = document.getElementById('filterCategory');
+            const currentVal = select.value || 'all';
+
+            const allCats = [...CATEGORIES.expense, ...CATEGORIES.income];
+            select.innerHTML = `<option value="all">전체 카테고리</option>` + 
+                allCats.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+
+            select.value = currentVal;
+        }
+
+        function setTransactionType(type) {
+            document.getElementById('txType').value = type;
+            const btnExpense = document.getElementById('typeBtnExpense');
+            const btnIncome = document.getElementById('typeBtnIncome');
+
+            if (type === 'expense') {
+                btnExpense.className = 'py-2 rounded-lg text-xs font-semibold transition bg-white text-rose-600 shadow-sm';
+                btnIncome.className = 'py-2 rounded-lg text-xs font-semibold transition text-slate-500';
+            } else {
+                btnIncome.className = 'py-2 rounded-lg text-xs font-semibold transition bg-white text-emerald-600 shadow-sm';
+                btnExpense.className = 'py-2 rounded-lg text-xs font-semibold transition text-slate-500';
+            }
+            populateModalCategoryOptions(type);
+        }
+
+        function populateModalCategoryOptions(type) {
+            const select = document.getElementById('txCategory');
+            select.innerHTML = CATEGORIES[type].map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+        }
+
+        function formatAmountInput(input) {
+            let value = input.value.replace(/[^\d]/g, '');
+            if (value) {
+                input.value = Number(value).toLocaleString();
+            } else {
+                input.value = '';
+            }
+        }
+
+        function parseRawAmount(value) {
+            if (!value) return 0;
+            return parseInt(String(value).replace(/[^\d]/g, ''), 10) || 0;
+        }
+
+        function openAddModal() {
+            document.getElementById('editId').value = '';
+            document.getElementById('modalTitle').innerText = '내역 추가';
+            document.getElementById('transactionForm').reset();
+            document.getElementById('txDate').value = getTodayFormatted();
+
+            setTransactionType('expense');
+            document.getElementById('addModal').classList.remove('hidden');
+        }
+
+        function closeAddModal() {
+            document.getElementById('addModal').classList.add('hidden');
+        }
+
+        function handleBackdropClick(event, modalId) {
+            if (event.target.id === modalId) {
+                document.getElementById(modalId).classList.add('hidden');
+            }
+        }
+
+        function editTransaction(id) {
+            const t = transactions.find(item => item.id === id);
+            if (!t) return;
+
+            openAddModal();
+            document.getElementById('editId').value = t.id;
+            document.getElementById('modalTitle').innerText = '내역 수정';
+            document.getElementById('txDate').value = t.date;
+            document.getElementById('txAmount').value = Number(t.amount || 0).toLocaleString();
+            document.getElementById('txNote').value = t.note || '';
+            document.getElementById('txPaymentMethod').value = t.paymentMethod || '신용/체크카드';
+
+            setTransactionType(t.type || 'expense');
+            document.getElementById('txCategory').value = t.category;
+        }
+
+        function saveTransaction(e) {
+            e.preventDefault();
+
+            const editId = document.getElementById('editId').value;
+            const type = document.getElementById('txType').value;
+            const date = document.getElementById('txDate').value;
+            const amount = parseRawAmount(document.getElementById('txAmount').value);
+            const category = document.getElementById('txCategory').value;
+            const paymentMethod = document.getElementById('txPaymentMethod').value;
+            const note = document.getElementById('txNote').value.trim();
+
+            if (!date) {
+                showToast('날짜를 입력해주세요.', 'error');
+                return;
+            }
+            if (!amount || amount <= 0) {
+                showToast('금액을 올바르게 입력해주세요.', 'error');
+                return;
+            }
+            if (!note) {
+                showToast('사용처 및 메모를 입력해주세요.', 'error');
+                return;
+            }
+
+            const txData = {
+                id: editId || Date.now().toString(),
+                type,
+                date,
+                amount,
+                category,
+                paymentMethod,
+                note,
+                updatedAt: new Date().toISOString()
+            };
+
+            if (editId) {
+                const idx = transactions.findIndex(t => t.id === editId);
+                if (idx !== -1) transactions[idx] = txData;
+            } else {
+                transactions.push(txData);
+            }
+
+            saveDataToStorage();
+
+            if (date && periodMode === 'monthly') {
+                const parts = date.split('-');
+                if (parts.length >= 2) {
+                    currentYear = parseInt(parts[0], 10);
+                    currentMonth = parseInt(parts[1], 10);
+                    updateMonthHeader();
+                }
+            }
+
+            renderAllViews();
+            closeAddModal();
+            showToast(editId ? '내역이 수정되었습니다.' : '새 내역이 저장되었습니다.');
+        }
+
+        function requestDeleteTransaction(id) {
+            openConfirmModal("내역 삭제", "해당 내역을 삭제하시겠습니까?", () => {
+                transactions = transactions.filter(t => t.id !== id);
+                saveDataToStorage();
+                renderAllViews();
+                showToast('내역이 삭제되었습니다.');
+            });
+        }
+
+        let selectedReceiptBase64 = null;
+        let selectedReceiptMime = null;
+
+        function openReceiptModal() {
+            resetReceiptImage();
+            document.getElementById('receiptModal').classList.remove('hidden');
+        }
+
+        function closeReceiptModal() {
+            document.getElementById('receiptModal').classList.add('hidden');
+        }
+
+        function handleReceiptFileSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (!file.type.startsWith('image/')) {
+                showToast('이미지 파일만 선택 가능합니다.', 'error');
+                return;
+            }
+
+            selectedReceiptMime = file.type;
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const dataUrl = evt.target.result;
+                selectedReceiptBase64 = dataUrl.split(',')[1];
+
+                document.getElementById('receiptImagePreview').src = dataUrl;
+                document.getElementById('receiptUploadPlaceholder').classList.add('hidden');
+                document.getElementById('receiptPreviewContainer').classList.remove('hidden');
+                document.getElementById('startScanBtn').disabled = false;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function resetReceiptImage(e) {
+            if (e) e.stopPropagation();
+            selectedReceiptBase64 = null;
+            selectedReceiptMime = null;
+            document.getElementById('receiptFileInput').value = '';
+            document.getElementById('receiptImagePreview').src = '';
+            document.getElementById('receiptUploadPlaceholder').classList.remove('hidden');
+            document.getElementById('receiptPreviewContainer').classList.add('hidden');
+            document.getElementById('startScanBtn').disabled = true;
+            document.getElementById('receiptScanLoading').classList.add('hidden');
+        }
+
+        async function processReceiptScan() {
+            if (!selectedReceiptBase64) return;
+
+            const loadingEl = document.getElementById('receiptScanLoading');
+            const scanBtn = document.getElementById('startScanBtn');
+
+            loadingEl.classList.remove('hidden');
+            scanBtn.disabled = true;
+
+            try {
+                const apiKey = ""; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+                const promptText = `이 영수증 사진을 분석하여 다음 JSON 정보를 정확히 추출하세요.
+설명이나 수식어 없이 지정된 JSON 형태만 반환하세요:
+{
+  "amount": 숫자만(원 단위 정수),
+  "date": "YYYY-MM-DD" (영수증에 언급된 결제 날짜. 없으면 오늘날짜 "${getTodayFormatted()}"),
+  "category": "식비/카페" | "교통/차량" | "쇼핑/의류" | "주거/통신" | "문화/취미" | "의료/건강" | "기타지출" 중 가장 적절한 것,
+  "paymentMethod": "신용/체크카드" | "계좌이체" | "네이버 페이" | "기타",
+  "note": "상호명 또는 가맹점명 및 주요 구매 항목 요약"
+}`;
+
+                const payload = {
+                    contents: [{
+                        role: "user",
+                        parts: [
+                            { text: promptText },
+                            {
+                                inlineData: {
+                                    mimeType: selectedReceiptMime || "image/jpeg",
+                                    data: selectedReceiptBase64
+                                }
+                            }
+                        ]
+                    }],
+                    generationConfig: {
+                        responseMimeType: "application/json"
+                    }
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`AI 서버 응답 오류: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const jsonText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (!jsonText) {
+                    throw new Error("영수증에서 데이터를 인식하지 못했습니다.");
+                }
+
+                const parsed = JSON.parse(jsonText);
+
+                closeReceiptModal();
+                openAddModal();
+
+                if (parsed.date) document.getElementById('txDate').value = parsed.date;
+                if (parsed.amount) document.getElementById('txAmount').value = Number(parsed.amount).toLocaleString();
+                if (parsed.note) document.getElementById('txNote').value = parsed.note;
+                if (parsed.paymentMethod) document.getElementById('txPaymentMethod').value = parsed.paymentMethod;
+
+                setTransactionType('expense');
+                if (parsed.category) {
+                    document.getElementById('txCategory').value = parsed.category;
+                }
+
+                showToast('AI 영수증 분석이 완료되었습니다!');
+
+            } catch (err) {
+                console.error("Receipt Scanning Error:", err);
+                showToast('영수증 분석 중 오류가 발생했습니다. 직접 입력해 주세요.', 'error');
+            } finally {
+                loadingEl.classList.add('hidden');
+                scanBtn.disabled = false;
+            }
+        }
+
+        function openSmartParseModal() {
+            document.getElementById('smartTextInput').value = '';
+            document.getElementById('smartParseModal').classList.remove('hidden');
+        }
+
+        function closeSmartParseModal() {
+            document.getElementById('smartParseModal').classList.add('hidden');
+        }
+
+        function processSmartParse() {
+            const text = document.getElementById('smartTextInput').value.trim();
+            if (!text) {
+                showToast('문자를 입력해주세요.', 'error');
+                return;
+            }
+
+            const amountMatch = text.match(/([\d,]+)\s*원/);
+            const amount = amountMatch ? parseInt(amountMatch[1].replace(/,/g, ''), 10) : null;
+
+            const dateMatch = text.match(/(\d{1,2})[\/\.-](\d{1,2})/);
+            let parsedDate = null;
+            if (dateMatch) {
+                const month = String(dateMatch[1]).padStart(2, '0');
+                const day = String(dateMatch[2]).padStart(2, '0');
+                parsedDate = `${currentYear}-${month}-${day}`;
+            } else {
+                parsedDate = getTodayFormatted();
+            }
+
+            let detectedPaymentMethod = '신용/체크카드';
+            if (text.includes('네이버') || text.includes('네이버페이') || text.includes('N페이')) {
+                detectedPaymentMethod = '네이버 페이';
+            } else if (text.includes('계좌') || text.includes('이체')) {
+                detectedPaymentMethod = '계좌이체';
+            }
+
+            let cleaned = text
+                .replace(/\[.*?\]/g, '')
+                .replace(/\b\d{1,2}[\/\.-]\d{1,2}\b/g, '')
+                .replace(/\b\d{1,2}:\d{2}\b/g, '')
+                .replace(/[\d,]+\s*원/g, '')
+                .replace(/(승인|일시불|누적|체크|신용|결제|완료|입금|출금|잔액|네이버페이|N페이)/g, '')
+                .trim();
+
+            const words = cleaned.split(/\s+/).filter(w => w.length > 0);
+            const note = words.length > 0 ? words.join(' ') : '결제 내역';
+
+            closeSmartParseModal();
+            openAddModal();
+
+            if (parsedDate) document.getElementById('txDate').value = parsedDate;
+            if (amount) {
+                document.getElementById('txAmount').value = Number(amount).toLocaleString();
+            }
+            document.getElementById('txNote').value = note;
+            document.getElementById('txPaymentMethod').value = detectedPaymentMethod;
+            setTransactionType('expense');
+
+            showToast('자동 감지된 항목이 채워졌습니다.');
+        }
+
+        function toggleBackupModal() {
+            const modal = document.getElementById('backupModal');
+            modal.classList.toggle('hidden');
+        }
+
+        function exportDataCSV() {
+            if (transactions.length === 0) {
+                showToast('내보낼 데이터가 없습니다.', 'error');
+                return;
+            }
+            let csvContent = "\uFEFF날짜,구분,카테고리,금액,결제수단,사용처/메모\n";
+            transactions.forEach(t => {
+                const typeText = t.type === 'expense' ? '지출' : '수입';
+                const row = [
+                    `"${t.date || ''}"`,
+                    `"${typeText}"`,
+                    `"${t.category || ''}"`,
+                    t.amount || 0,
+                    `"${t.paymentMethod || ''}"`,
+                    `"${(t.note || '').replace(/"/g, '""')}"`
+                ];
+                csvContent += row.join(",") + "\n";
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `가계부_내역_${getTodayFormatted()}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function exportDataJSON() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(transactions, null, 2));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", `가계부_백업_${getTodayFormatted()}.json`);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
+
+        function importDataJSON(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const imported = JSON.parse(event.target.result);
+                    if (Array.isArray(imported)) {
+                        transactions = imported;
+                        saveDataToStorage();
+                        renderAllViews();
+                        showToast(`총 ${imported.length}건의 데이터가 복원되었습니다.`);
+                        toggleBackupModal();
+                    }
+                } catch (err) {
+                    showToast('올바른 백업 파일(.json)이 아닙니다.', 'error');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function requestClearAllData() {
+            openConfirmModal("전체 데이터 초기화", "정말로 모든 가계부 내역을 초기화하시겠습니까? (되돌릴 수 없습니다)", () => {
+                transactions = [];
+                saveDataToStorage();
+                renderAllViews();
+                showToast('모든 내역이 초기화되었습니다.');
+                toggleBackupModal();
+            });
+        }
+
+        function openConfirmModal(title, message, onConfirm) {
+            document.getElementById('confirmTitle').innerText = title;
+            document.getElementById('confirmMessage').innerText = message;
+            pendingConfirmCallback = onConfirm;
+            document.getElementById('confirmModal').classList.remove('hidden');
+        }
+
+        function closeConfirmModal(accepted) {
+            document.getElementById('confirmModal').classList.add('hidden');
+            if (accepted && typeof pendingConfirmCallback === 'function') {
+                pendingConfirmCallback();
+            }
+            pendingConfirmCallback = null;
+        }
+
+        function showToast(msg, type = 'success') {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMessage');
+            const toastIcon = document.getElementById('toastIcon');
+
+            toastMsg.innerText = msg;
+            toastIcon.className = type === 'error' ? 'fa-solid fa-circle-exclamation text-rose-400' : 'fa-solid fa-circle-check text-emerald-400';
+
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 2500);
+        }
+    </script>
+</body>
+</html>
