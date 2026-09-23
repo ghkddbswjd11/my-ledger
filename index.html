@@ -342,7 +342,7 @@
                 <ol class="list-decimal list-inside space-y-1 text-[11px] leading-relaxed">
                     <li>나만의 **[동기화 코드]**(예: <code class="bg-amber-100 text-amber-800 px-1 rounded">ourfamily1234</code>)를 정합니다.</li>
                     <li>PC와 모바일 가계부 양쪽에 **동일한 코드**를 입력하고 [연동하기]를 누릅니다.</li>
-                    <li>한쪽에서 저장하면 다른쪽 기기에도 즉시 실시간 반영됩니다!</li>
+                    <li>PC의 많은 데이터를 모바일로 즉시 보내려면 **[현재 기기 내역 강제 전송]** 버튼을 누르세요!</li>
                 </ol>
             </div>
 
@@ -369,6 +369,12 @@
                         <span>연동 해제</span>
                     </button>
                 </div>
+
+                <!-- Force Sync Button for transferring PC existing items -->
+                <button type="button" onclick="forcePushCurrentDeviceData()" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-sm">
+                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                    <span>현재 기기 내역 클라우드로 강제 전송 (모바일로 옮기기)</span>
+                </button>
             </div>
 
             <div id="syncStatusBox" class="text-center p-2.5 rounded-xl text-xs font-medium bg-slate-100 text-slate-500">
@@ -546,7 +552,7 @@
         let monthlyBudget = 1500000;
         let currentYear = new Date().getFullYear();
         let currentMonth = new Date().getMonth() + 1;
-        let periodMode = 'all'; // Default to 'all' so entries are always visible
+        let periodMode = 'all'; 
         let pendingConfirmCallback = null;
 
         // Firebase Cloud Sync Global Variables
@@ -578,7 +584,6 @@
                 }
 
                 let merged = [];
-                // Multi-key Legacy Search
                 LEGACY_KEYS.forEach(key => {
                     const localData = localStorage.getItem(key);
                     const sessionData = sessionStorage.getItem(key);
@@ -594,7 +599,6 @@
                     });
                 });
 
-                // Deduplicate items by ID or unique combo
                 const uniqueMap = new Map();
                 merged.forEach(item => {
                     if (item && item.id) {
@@ -605,16 +609,7 @@
                     }
                 });
 
-                if (uniqueMap.size > 0) {
-                    transactions = Array.from(uniqueMap.values());
-                } else {
-                    // Restored default sample data
-                    transactions = [
-                        { id: 'tx_sep16_1', type: 'expense', date: '2026-09-16', amount: 15000, category: '식비/카페', paymentMethod: '네이버 페이', note: '식비 (9/16)' },
-                        { id: 'tx_sep17_1', type: 'expense', date: '2026-09-17', amount: 29100, category: '식비/카페', paymentMethod: '신용/체크카드', note: '식비 (9/17)' },
-                        { id: 'tx_sep18_1', type: 'expense', date: '2026-09-18', amount: 37300, category: '식비/카페', paymentMethod: '신용/체크카드', note: '식비 (9/18)' }
-                    ];
-                }
+                transactions = Array.from(uniqueMap.values());
                 saveDataToStorage();
             } catch (e) {
                 console.warn("Storage access notice engaged.", e);
@@ -625,10 +620,8 @@
             let recoveredCount = 0;
             const uniqueMap = new Map();
             
-            // Re-populate with current transactions
             transactions.forEach(t => uniqueMap.set(t.id, t));
 
-            // Scan all keys in localStorage
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
                 try {
@@ -657,9 +650,9 @@
             renderAllViews();
             
             if (recoveredCount > 0) {
-                showToast(`${recoveredCount}건의 숨겨진 내역을 찾아서 복구했습니다!`);
+                showToast(`${recoveredCount}건의 숨겨진 내역을 복구했습니다!`);
             } else {
-                showToast(`현재 저장소에 존재하는 모든 내역(${transactions.length}건)을 화면에 동기화했습니다.`);
+                showToast(`현재 저장소의 모든 내역(${transactions.length}건)을 정상 표시했습니다.`);
             }
         }
 
@@ -670,7 +663,6 @@
                 sessionStorage.setItem(STORAGE_KEY, data);
                 localStorage.setItem(BUDGET_KEY, monthlyBudget.toString());
 
-                // Auto push to Firebase if sync is active
                 pushToCloudSync();
             } catch (e) {
                 console.warn("Could not write to localStorage.", e);
@@ -739,21 +731,17 @@
 
             const ledgerRef = firebaseDb.ref('ledgers/' + code);
 
-            // Detach previous listener if any
             if (dbRefListener) {
                 ledgerRef.off('value', dbRefListener);
             }
 
-            // Show connecting toast
             showToast(`☁️ [${code}] 코드 실시간 연동 중...`);
 
             dbRefListener = ledgerRef.on('value', (snapshot) => {
                 const cloudData = snapshot.val();
                 if (cloudData && Array.isArray(cloudData.transactions)) {
-                    // Smart merge with local data to avoid overwriting newer entries
                     mergeCloudTransactions(cloudData.transactions);
                 } else if (!cloudData && transactions.length > 0) {
-                    // First time code created! Push current local transactions to cloud
                     ledgerRef.set({
                         transactions: transactions,
                         lastUpdated: new Date().toISOString()
@@ -768,15 +756,24 @@
 
         function mergeCloudTransactions(cloudTxs) {
             const map = new Map();
-            // Local items first
-            transactions.forEach(t => map.set(t.id, t));
+            const cloudIdSet = new Set((cloudTxs || []).map(item => item.id));
 
-            // Cloud items
-            let newItemsAdded = 0;
-            cloudTxs.forEach(cloudItem => {
+            let localHasNewItems = false;
+
+            transactions.forEach(t => {
+                if (t && t.id) {
+                    map.set(t.id, t);
+                    if (!cloudIdSet.has(t.id)) {
+                        localHasNewItems = true;
+                    }
+                }
+            });
+
+            let newItemsAddedFromCloud = 0;
+            (cloudTxs || []).forEach(cloudItem => {
                 if (cloudItem && cloudItem.id) {
                     if (!map.has(cloudItem.id)) {
-                        newItemsAdded++;
+                        newItemsAddedFromCloud++;
                     }
                     map.set(cloudItem.id, cloudItem);
                 }
@@ -784,7 +781,6 @@
 
             transactions = Array.from(map.values());
             
-            // Save locally without triggering loop
             try {
                 const data = JSON.stringify(transactions);
                 localStorage.setItem(STORAGE_KEY, data);
@@ -793,8 +789,13 @@
 
             renderAllViews();
 
-            if (newItemsAdded > 0) {
-                showToast(`☁️ 클라우드에서 새 내역 ${newItemsAdded}건을 동기화했습니다!`);
+            // Automatically upload PC items if cloud didn't have them
+            if (localHasNewItems && currentSyncCode && firebaseDb) {
+                pushToCloudSync();
+            }
+
+            if (newItemsAddedFromCloud > 0) {
+                showToast(`☁️ 클라우드에서 새 내역 ${newItemsAddedFromCloud}건을 동기화했습니다!`);
             }
         }
 
@@ -808,6 +809,16 @@
             } catch(e) {
                 console.warn("Push cloud notice:", e);
             }
+        }
+
+        function forcePushCurrentDeviceData() {
+            if (!currentSyncCode) {
+                showToast('먼저 동기화 코드를 입력하고 [실시간 연동 시작]을 눌러주세요.', 'error');
+                return;
+            }
+            pushToCloudSync();
+            showToast(`🚀 현재 기기 내역(${transactions.length}건)을 클라우드로 완벽 전송했습니다!`);
+            closeCloudSyncModal();
         }
 
         function updateSyncStatusUI() {
@@ -862,7 +873,6 @@
             updateCategoryDropdownOptions();
             renderAllViews();
 
-            // Auto connect if sync code was previously saved
             const savedSyncCode = localStorage.getItem(SYNC_CODE_KEY);
             if (savedSyncCode) {
                 currentSyncCode = savedSyncCode;
